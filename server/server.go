@@ -3,6 +3,7 @@ package server
 
 import (
 	"dns-forwarder/doh"
+	"dns-forwarder/dot"
 	"dns-forwarder/netutils" // <-- 修改导入路径
 	"fmt"
 	"log"
@@ -11,30 +12,50 @@ import (
 	"github.com/miekg/dns"
 )
 
+// Resolver 定义了所有上游DNS解析器（DoH, DoT等）都必须实现的通用接口。
+// 这使得服务器的核心逻辑可以与具体的解析器实现解耦。
+type Resolver interface {
+	// Resolve 接收一个DNS查询消息，并返回一个响应消息或一个错误。
+	Resolve(req *dns.Msg) (*dns.Msg, error)
+}
+
 // Server 结构体持有服务器的配置和预计算的ECS信息
 type Server struct {
 	listenAddr string
-	dohClient  *doh.Client
-	ecsIP      net.IP // 预先计算好的ECS IP
-	ecsNetmask uint8  // 预先计算好的ECS子网掩码
+	resolver   Resolver // 使用接口代替具体实现
+	ecsIP      net.IP   // 预先计算好的ECS IP
+	ecsNetmask uint8    // 预先计算好的ECS子网掩码
 }
 
 // NewServer 创建一个新的DNS服务器实例
-// 它在启动时就处理好ECS逻辑
-func NewServer(listenAddr, dohServerURL, customECS string) (*Server, error) {
+// 它现在可以根据参数选择DoH或DoT作为上游解析器
+func NewServer(listenAddr, dohServerURL, dotServerURL, customECS string) (*Server, error) {
+	// --- Part 1: 选择和配置上游解析器 ---
+	var resolver Resolver
+	if dohServerURL != "" {
+		log.Printf("使用上游 DoH 服务器: %s", dohServerURL)
+		resolver = doh.NewClient(dohServerURL)
+	} else if dotServerURL != "" {
+		log.Printf("使用上游 DoT 服务器: %s", dotServerURL)
+		resolver = dot.NewClient(dotServerURL)
+	} else {
+		// 这本应在main.go中被阻止，但作为安全检查
+		return nil, fmt.Errorf("必须提供一个DoH或DoT服务器地址")
+	}
+
+	// --- Part 2: 处理ECS逻辑 (这部分保持不变) ---
 	var ecsIP net.IP
 	var ecsNetmask uint8 = 24 // 默认IPv4子网掩码
 
 	if customECS != "" {
-		// --- 情况1: 用户自定义了ECS ---
+		// 情况1: 用户自定义了ECS
 		log.Printf("使用自定义ECS: %s", customECS)
 		var err error
 		_, ipNet, err := net.ParseCIDR(customECS)
 		if err != nil {
-			// 如果CIDR解析失败，尝试解析为单个IP
 			ecsIP = net.ParseIP(customECS)
 			if ecsIP == nil {
-				return nil, fmt.Errorf("无效的自定义ECS格式: %s, 请使用IP或CIDR格式", customECS)
+				return nil, fmt.Errorf("无效的自定义ECS格式: '%s', 请使用IP或CIDR格式", customECS)
 			}
 		} else {
 			ecsIP = ipNet.IP
@@ -42,7 +63,7 @@ func NewServer(listenAddr, dohServerURL, customECS string) (*Server, error) {
 			ecsNetmask = uint8(maskSize)
 		}
 	} else {
-		// --- 情况2: 自动检测公网IP ---
+		// 情况2: 自动检测公网IP
 		log.Println("正在自动检测公网IP用于ECS...")
 		var err error
 		ecsIP, err = netutils.GetPublicIP()
@@ -52,9 +73,10 @@ func NewServer(listenAddr, dohServerURL, customECS string) (*Server, error) {
 		log.Printf("成功检测到公网IP: %s, 将使用 %s/%d 作为ECS", ecsIP, ecsIP, ecsNetmask)
 	}
 
+	// --- Part 3: 创建服务器实例 ---
 	return &Server{
 		listenAddr: listenAddr,
-		dohClient:  doh.NewClient(dohServerURL),
+		resolver:   resolver, // 存储接口
 		ecsIP:      ecsIP,
 		ecsNetmask: ecsNetmask,
 	}, nil
@@ -77,7 +99,7 @@ func (s *Server) startListener(netType string, handler *dns.ServeMux) {
 	}
 }
 
-// handleRequest 现在使用预设的ECS信息
+// handleRequest 现在通过通用的resolver接口转发请求
 func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	forwardReq := r.Copy()
 
@@ -115,7 +137,8 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	clientIP := w.RemoteAddr().(*net.UDPAddr).IP
 	log.Printf("来自 %s 的请求: %s, 附加ECS: %s/%d", clientIP.String(), r.Question[0].String(), s.ecsIP.String(), s.ecsNetmask)
 
-	resp, err := s.dohClient.Resolve(forwardReq)
+	// 使用s.resolver接口进行解析，无需关心具体是DoH还是DoT
+	resp, err := s.resolver.Resolve(forwardReq)
 	if err != nil {
 		log.Printf("错误: 转发DNS请求失败: %v", err)
 		dns.HandleFailed(w, r)

@@ -29,15 +29,23 @@ type Server struct {
 
 // NewServer 创建一个新的DNS服务器实例
 // 它现在可以根据参数选择DoH或DoT作为上游解析器
-func NewServer(listenAddr, dohServerURL, dotServerURL, customECS, ipServiceURL string) (*Server, error) {
+func NewServer(listenAddr, dohServerURL, dotServerURL, socks5Proxy, customECS, ipServiceURL string) (*Server, error) {
 	// --- Part 1: 选择和配置上游解析器 ---
 	var resolver Resolver
+	var err error
+
 	if dohServerURL != "" {
 		log.Printf("使用上游 DoH 服务器: %s", dohServerURL)
-		resolver = doh.NewClient(dohServerURL)
+		resolver, err = doh.NewClient(dohServerURL, socks5Proxy)
+		if err != nil {
+			return nil, fmt.Errorf("创建DoH客户端失败: %w", err)
+		}
 	} else if dotServerURL != "" {
 		log.Printf("使用上游 DoT 服务器: %s", dotServerURL)
-		resolver = dot.NewClient(dotServerURL)
+		resolver, err = dot.NewClient(dotServerURL, socks5Proxy)
+		if err != nil {
+			return nil, fmt.Errorf("创建DoT客户端失败: %w", err)
+		}
 	} else {
 		// 这本应在main.go中被阻止，但作为安全检查
 		return nil, fmt.Errorf("必须提供一个DoH或DoT服务器地址")

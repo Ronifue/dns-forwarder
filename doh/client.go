@@ -3,6 +3,7 @@ package doh
 
 import (
 	"bytes"
+	"dns-forwarder/proxy"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,11 +18,20 @@ type Client struct {
 }
 
 // NewClient 创建一个新的DoH客户端实例
-func NewClient(serverURL string) *Client {
-	return &Client{
-		URL:        serverURL,
-		httpClient: &http.Client{},
+// 如果提供了socks5Addr，它将通过SOCKS5代理路由所有DoH请求
+func NewClient(serverURL, socks5Addr string) (*Client, error) {
+	// 使用我们的proxy模块来创建一个可能带有代理的http transport
+	transport, err := proxy.NewHTTPTransport(socks5Addr)
+	if err != nil {
+		return nil, fmt.Errorf("无法创建DoH HTTP transport: %w", err)
 	}
+
+	return &Client{
+		URL: serverURL,
+		httpClient: &http.Client{
+			Transport: transport,
+		},
+	}, nil
 }
 
 // Resolve 发送DNS查询到DoH服务器并返回响应

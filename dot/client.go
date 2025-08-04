@@ -2,46 +2,82 @@
 package dot
 
 import (
+	"crypto/tls"
+	customproxy "dns-forwarder/proxy"
 	"fmt"
-	"time"
+	"net"
 
 	"github.com/miekg/dns"
+	"golang.org/x/net/proxy"
 )
 
 // Client 定义了一个DoT客户端
 type Client struct {
-	Address   string      // DoT服务器地址, 例如 "dot.pub:853"
-	dnsClient *dns.Client // 复用dns客户端以提高性能
+	Address string       // DoT服务器地址, 例如 "dot.pub:853"
+	dialer  proxy.Dialer // 存储我们自定义的拨号器（可能带代理）
 }
 
 // NewClient 创建一个新的DoT客户端实例
-func NewClient(serverAddress string) *Client {
+// 如果提供了socks5Addr，它将通过SOCKS5代理路由所有DoT请求
+func NewClient(serverAddress, socks5Addr string) (*Client, error) {
+	// 使用我们的proxy模块来创建一个可能带有代理的拨号器
+	dialer, err := customproxy.CreateDialer(socks5Addr)
+	if err != nil {
+		return nil, fmt.Errorf("无法创建DoT拨号器: %w", err)
+	}
+
 	return &Client{
 		Address: serverAddress,
-		dnsClient: &dns.Client{
-			Net:     "tcp-tls",       // 关键: 使用DNS-over-TLS
-			Timeout: 5 * time.Second, // 设置一个合理的超时
-		},
-	}
+		dialer:  dialer,
+	}, nil
 }
 
-// Resolve 发送DNS查询到DoT服务器并返回响应, 实现了server.Resolver接口
+// Resolve 发送DNS查询到DoT服务器并返回响应
+// 这里我们手动处理连接过程，以支持自定义的代理拨号器
 func (c *Client) Resolve(req *dns.Msg) (*dns.Msg, error) {
-	// dns.Client的Exchange方法会处理连接、发送请求和接收响应的整个过程
-	resp, _, err := c.dnsClient.Exchange(req, c.Address)
+	// 1. 使用我们存储的拨号器建立TCP连接（此连接可能通过SOCKS5代理）
+	conn, err := c.dialer.Dial("tcp", c.Address)
 	if err != nil {
-		return nil, fmt.Errorf("发送DoT请求到 %s 失败: %w", c.Address, err)
+		return nil, fmt.Errorf("通过拨号器连接到 %s 失败: %w", c.Address, err)
+	}
+	defer conn.Close()
+
+	// 2. 从地址中提取TLS服务器名 (Server Name Indication)
+	host, _, err := net.SplitHostPort(c.Address)
+	if err != nil {
+		// 如果地址中没有端口，假定整个地址就是host
+		host = c.Address
+		// 在某些情况下，特别是当地址是IP时，可能会出现此错误。
+		// 更好的做法是清理地址，但在这里我们假设它是一个有效的主机名或IP。
 	}
 
-	// 检查响应是否被截断。对于TCP/TLS来说，这通常不应该发生，但作为健壮性检查是好的。
-	if resp.Truncated {
-		// 在DoT中，截断的响应是一个异常情况，可能表示服务器端有问题。
-		// 客户端可以选择重试，但在这里我们简单地返回错误。
-		return nil, fmt.Errorf("从DoT服务器 %s 收到的响应被截断", c.Address)
+	// 3. 在TCP连接之上进行TLS握手
+	tlsConn := tls.Client(conn, &tls.Config{
+		ServerName: host,
+	})
+
+	// 4. 将TLS连接包装在dns.Conn中，以便发送和接收DNS消息
+	co := &dns.Conn{Conn: tlsConn}
+	defer co.Close()
+
+	// 5. 发送DNS请求
+	if err := co.WriteMsg(req); err != nil {
+		return nil, fmt.Errorf("向DoT服务器 %s 发送DNS请求失败: %w", c.Address, err)
+	}
+
+	// 6. 接收DNS响应
+	resp, err := co.ReadMsg()
+	if err != nil {
+		return nil, fmt.Errorf("从DoT服务器 %s 读取DNS响应失败: %w", c.Address, err)
 	}
 
 	if resp == nil {
 		return nil, fmt.Errorf("从DoT服务器 %s 收到空的响应", c.Address)
+	}
+
+	// 检查响应ID是否匹配请求ID
+	if resp.Id != req.Id {
+		return nil, fmt.Errorf("DoT响应ID不匹配: 收到 %d, 期望 %d", resp.Id, req.Id)
 	}
 
 	return resp, nil

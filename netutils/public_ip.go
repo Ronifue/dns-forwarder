@@ -11,11 +11,11 @@ import (
 )
 
 // GetPublicIP 通过访问外部服务获取本机的公网IPv4地址。
-func GetPublicIP() (net.IP, error) {
+func GetPublicIP(serviceURL string) (net.IP, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("https://4.ipw.cn")
+	resp, err := client.Get(serviceURL)
 	if err != nil {
-		return nil, fmt.Errorf("无法连接到IP查询服务: %w", err)
+		return nil, fmt.Errorf("无法连接到IP查询服务 '%s': %w", serviceURL, err)
 	}
 	defer resp.Body.Close()
 

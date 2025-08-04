@@ -17,7 +17,7 @@ func main() {
 	listenIP := flag.String("ip", "", "指定要监听的IP地址。留空以显示可选IP列表。")
 	listenPort := flag.String("port", "53", "指定要监听的端口。")
 	dohServer := flag.String("doh", "", "上游DoH服务器URL (例如: https://doh.pub/dns-query)。")
-	dotServer := flag.String("dot", "", "上游DoT服务器URL (例如: dns.pub:853)。")
+	dotServer := flag.String("dot", "", "上游DoT服务器URL (例如: dot.pub:853)。")
 	customECS := flag.String("ecs", "", "可选: 自定义ECS, 格式为IP (如8.8.8.8) 或CIDR (如8.8.8.0/24)。留空则自动检测公网IP。")
 	listIPs := flag.Bool("list-ips", false, "仅列出本机所有可用的IPv4地址并退出。")
 

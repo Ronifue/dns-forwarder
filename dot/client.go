@@ -10,8 +10,8 @@ import (
 
 // Client 定义了一个DoT客户端
 type Client struct {
-	Address    string       // DoT服务器地址, 例如 "dns.pub:853"
-	dnsClient  *dns.Client  // 复用dns客户端以提高性能
+	Address   string      // DoT服务器地址, 例如 "dot.pub:853"
+	dnsClient *dns.Client // 复用dns客户端以提高性能
 }
 
 // NewClient 创建一个新的DoT客户端实例
@@ -19,8 +19,8 @@ func NewClient(serverAddress string) *Client {
 	return &Client{
 		Address: serverAddress,
 		dnsClient: &dns.Client{
-			Net:          "tcp-tls", // 关键: 使用DNS-over-TLS
-			Timeout:      5 * time.Second, // 设置一个合理的超时
+			Net:     "tcp-tls",       // 关键: 使用DNS-over-TLS
+			Timeout: 5 * time.Second, // 设置一个合理的超时
 		},
 	}
 }
